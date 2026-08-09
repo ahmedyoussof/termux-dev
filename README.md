@@ -218,12 +218,24 @@ Install:
 ./install.sh
 ```
 
-The installer is idempotent. Running it again verifies existing components and skips what is already installed.
+The installer is idempotent. Running it again verifies existing components and skips what is already installed. Ubuntu packages are checked with `dpkg-query` first, so `apt-get update` only runs when something is genuinely missing.
 
-Repair an existing installation:
+Re-apply all configuration fixes **without downloading anything**:
 
 ```bash
 ./install.sh repair
+```
+
+Repair and also install anything that is actually missing:
+
+```bash
+./install.sh repair --full
+```
+
+Verify only:
+
+```bash
+./install.sh verify
 ```
 
 The installer does **not** run `pkg upgrade` automatically.
@@ -244,13 +256,19 @@ The startup sequence is:
 ```text
 Termux:X11
     ↓
-DISPLAY=:1
+DISPLAY=:0
     ↓
 Ubuntu
     ↓
 XFCE
     ↓
 code-server
+```
+
+`start.sh` also tries to open the Termux:X11 activity for you. To use a different display:
+
+```bash
+TERMUX_DEV_DISPLAY=:1 ./start.sh
 ```
 
 You should see XFCE inside Termux:X11.
@@ -273,13 +291,13 @@ Change it after the first login.
 
 # Ubuntu Access
 
-From an XFCE terminal:
+From **Termux** (the XFCE terminal is already inside Ubuntu):
 
 ```bash
 ubuntu
 ```
 
-or:
+The alias is added to `~/.bashrc` by the installer and is available in new Termux sessions. The full form is:
 
 ```bash
 proot-distro login ubuntu --user developer --shared-tmp
@@ -362,11 +380,13 @@ Stop and clean runtime state:
 # Useful Commands
 
 ```bash
-./install.sh          # Install / verify
-./install.sh repair   # Repair
-./start.sh            # Start X11 + Ubuntu + XFCE + code-server
-./stop.sh             # Stop
-./stop.sh clean       # Stop + clean runtime data
+./install.sh                # Install / verify
+./install.sh repair         # Re-apply config fixes (no downloads)
+./install.sh repair --full  # Repair + install anything missing
+./install.sh verify         # Verify only
+./start.sh                  # Start X11 + Ubuntu + XFCE + code-server
+./stop.sh                   # Stop
+./stop.sh clean             # Stop + clean runtime data
 ```
 
 ---
@@ -395,22 +415,31 @@ sudo apt upgrade
 
 # Troubleshooting
 
-## Black screen in Termux:X11
-
-Check:
-
-```bash
-./stop.sh clean
-./start.sh
-```
-
-Make sure the Termux:X11 Android application is open.
-
-Check the log:
+All logs live in one place:
 
 ```text
 ~/.termux-dev/logs/termux-x11.log
+~/.termux-dev/logs/xfce.log
+~/.termux-dev/logs/code-server.log
 ```
+
+## Black screen in Termux:X11
+
+First:
+
+```bash
+./stop.sh clean
+./install.sh repair
+./start.sh
+```
+
+`repair` re-applies the anti-black-screen configuration and downloads nothing:
+
+- `xfwm4` compositing disabled (software GL renders a black surface under Termux:X11)
+- DPMS/screen blanking disabled (`xset s off -dpms`)
+- `xfce4-screensaver`, `light-locker` and `xscreensaver` autostart disabled
+
+Then make sure the Termux:X11 Android application is actually in the foreground, and check `termux-x11.log`.
 
 ## XFCE does not start
 
@@ -418,14 +447,17 @@ Run:
 
 ```bash
 ./stop.sh clean
+./install.sh repair
 ./start.sh
 ```
 
-Then inspect:
+Then inspect `xfce.log`. Common causes, all handled by `repair`:
 
-```text
-~/.termux-dev/logs/xfce.log
-```
+- missing `/etc/machine-id`, which makes D-Bus refuse to start a session bus
+- the X socket not being visible inside Ubuntu (requires `--shared-tmp`)
+- the session being backgrounded inside PRoot, which kills it immediately
+
+Services are deliberately run in the **foreground inside PRoot** and backgrounded from Termux. PRoot traces every process in the container, so a session backgrounded inside a `proot-distro login` that then exits is torn down with it.
 
 ## Android keeps killing the desktop
 
