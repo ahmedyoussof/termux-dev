@@ -2,79 +2,43 @@
 
 set -u
 
-UBUNTU="ubuntu"
-DEV_USER="developer"
-BASE_DIR="$HOME/.termux-dev"
+UBUNTU_NAME="ubuntu"
+UBUNTU_USER="developer"
 
-info(){ echo -e "\033[1;34m[INFO]\033[0m $1"; }
-ok(){ echo -e "\033[1;32m[OK]\033[0m $1"; }
+info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
+ok() { echo -e "\033[1;32m[OK]\033[0m $1"; }
 
-stop_code_server(){
-    info "Stopping Ubuntu code-server..."
+clean=false
+[ "${1:-}" = "clean" ] && clean=true
 
-    if command -v proot-distro >/dev/null 2>&1; then
-        proot-distro login "$UBUNTU" --shared-tmp -- /bin/bash -lc "
-            pkill -u '$DEV_USER' -f 'code-server' 2>/dev/null || true
-        " 2>/dev/null || true
-    fi
+info "Stopping code-server..."
 
-    ok "code-server stopped"
-}
+proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+    -- bash -lc 'pkill -u "$USER" -f code-server 2>/dev/null || true' 2>/dev/null || true
 
-stop_xfce(){
-    info "Stopping XFCE..."
+info "Stopping XFCE..."
 
-    pkill -f "xfce4-session" 2>/dev/null || true
-    pkill -f "xfce4-panel" 2>/dev/null || true
-    pkill -f "xfdesktop" 2>/dev/null || true
-    pkill -f "xfwm4" 2>/dev/null || true
-    pkill -f "xfsettingsd" 2>/dev/null || true
-    pkill -f "xfconfd" 2>/dev/null || true
-    pkill -f "startxfce4" 2>/dev/null || true
+proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+    -- bash -lc '
+        for p in xfce4-session xfce4-panel xfdesktop xfwm4 xfsettingsd xfconfd dbus-daemon; do
+            pkill -u "$USER" -f "$p" 2>/dev/null || true
+        done
+    ' 2>/dev/null || true
 
-    ok "XFCE stopped"
-}
+sleep 1
 
-stop_x11(){
-    info "Stopping Termux:X11..."
+info "Stopping Termux:X11..."
+pkill -f "termux-x11" 2>/dev/null || true
 
-    pkill -f "termux-x11" 2>/dev/null || true
+if $clean; then
+    info "Cleaning runtime data..."
+    rm -rf "$HOME/.termux-dev/logs" 2>/dev/null || true
 
-    ok "Termux:X11 stopped"
-}
+    proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+        -- bash -lc '
+            rm -rf "/tmp/runtime-$USER"
+            rm -f /tmp/code-server.log /tmp/xfce.log
+        ' 2>/dev/null || true
+fi
 
-clean(){
-    info "Cleaning stale session data..."
-
-    rm -rf "$BASE_DIR/logs" 2>/dev/null || true
-
-    if command -v proot-distro >/dev/null 2>&1; then
-        proot-distro login "$UBUNTU" --shared-tmp -- /bin/bash -lc "
-            rm -rf /tmp/.X11-unix 2>/dev/null || true
-            rm -rf /home/$DEV_USER/.cache/code-server 2>/dev/null || true
-        " 2>/dev/null || true
-    fi
-
-    ok "Temporary data cleaned"
-}
-
-stop_all(){
-    stop_code_server
-    stop_xfce
-    stop_x11
-    ok "Development environment stopped"
-}
-
-case "${1:-stop}" in
-    stop)
-        stop_all
-        ;;
-    clean)
-        stop_all
-        clean
-        ;;
-    *)
-        echo "Usage: $0 [stop|clean]"
-        exit 1
-        ;;
-esac
+ok "Development environment stopped."

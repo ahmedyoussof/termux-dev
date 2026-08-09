@@ -2,101 +2,107 @@
 
 set -u
 
-UBUNTU="ubuntu"
-DEV_USER="developer"
 DISPLAY_NUM=":1"
-CODE_SERVER_PORT="8080"
+UBUNTU_NAME="ubuntu"
+UBUNTU_USER="developer"
 LOG_DIR="$HOME/.termux-dev/logs"
 
 mkdir -p "$LOG_DIR"
 
-info(){ echo -e "\033[1;34m[INFO]\033[0m $1"; }
-ok(){ echo -e "\033[1;32m[OK]\033[0m $1"; }
-warn(){ echo -e "\033[1;33m[WARN]\033[0m $1"; }
-err(){ echo -e "\033[1;31m[ERROR]\033[0m $1"; }
+info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
+ok() { echo -e "\033[1;32m[OK]\033[0m $1"; }
+error() { echo -e "\033[1;31m[ERROR]\033[0m $1"; }
 
-running(){
-    pgrep -f "$1" >/dev/null 2>&1
+command -v termux-x11 >/dev/null 2>&1 || {
+    error "Termux:X11 is not installed. Run ./install.sh first."
+    exit 1
 }
 
-if ! command -v proot-distro >/dev/null 2>&1; then
-    err "proot-distro is not installed. Run ./install.sh"
+command -v proot-distro >/dev/null 2>&1 || {
+    error "proot-distro is not installed. Run ./install.sh first."
     exit 1
-fi
+}
 
 export DISPLAY="$DISPLAY_NUM"
 
 info "Starting Termux:X11..."
 
-if running "termux-x11"; then
-    ok "Termux:X11 already running"
+if pgrep -f "termux-x11" >/dev/null 2>&1; then
+    ok "Termux:X11 already running."
 else
-    termux-x11 "$DISPLAY_NUM" >"$LOG_DIR/x11.log" 2>&1 &
+    termux-x11 "$DISPLAY_NUM" >"$LOG_DIR/termux-x11.log" 2>&1 &
     sleep 2
+
+    pgrep -f "termux-x11" >/dev/null 2>&1 || {
+        error "Termux:X11 failed to start."
+        cat "$LOG_DIR/termux-x11.log"
+        exit 1
+    }
+    ok "Termux:X11 started."
 fi
 
-if ! running "termux-x11"; then
-    err "Termux:X11 failed to start"
-    cat "$LOG_DIR/x11.log"
+info "Starting Ubuntu XFCE..."
+
+proot-distro login "$UBUNTU_NAME" \
+    --user "$UBUNTU_USER" \
+    --shared-tmp \
+    -- bash -lc '
+        export DISPLAY=:1
+        export LIBGL_ALWAYS_SOFTWARE=1
+        export XDG_RUNTIME_DIR=/tmp/runtime-$USER
+        mkdir -p "$XDG_RUNTIME_DIR"
+        chmod 700 "$XDG_RUNTIME_DIR"
+
+        if ! pgrep -u "$USER" -f "xfce4-session" >/dev/null 2>&1; then
+            nohup dbus-launch --exit-with-session startxfce4 >/tmp/xfce.log 2>&1 &
+        fi
+    ' >/dev/null 2>&1
+
+sleep 5
+
+if proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+    -- bash -lc 'pgrep -u "$USER" -f "xfce4-session" >/dev/null 2>&1'; then
+    ok "XFCE started."
+else
+    error "XFCE failed to start."
+    proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+        -- bash -lc 'cat /tmp/xfce.log 2>/dev/null || true'
     exit 1
 fi
 
-ok "Termux:X11 ready"
+info "Starting code-server..."
 
-info "Starting existing Termux XFCE..."
-
-if running "xfce4-session"; then
-    ok "XFCE already running"
+if proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+    -- bash -lc 'pgrep -u "$USER" -f "code-server" >/dev/null 2>&1'; then
+    ok "code-server already running."
 else
-    dbus-launch --exit-with-session startxfce4 >"$LOG_DIR/xfce.log" 2>&1 &
-    sleep 5
-fi
+    proot-distro login "$UBUNTU_NAME" \
+        --user "$UBUNTU_USER" \
+        --shared-tmp \
+        -- bash -lc '
+            nohup code-server \
+                --bind-addr 127.0.0.1:8080 \
+                >/tmp/code-server.log 2>&1 &
+        ' >/dev/null 2>&1
 
-if running "xfce4-session"; then
-    ok "XFCE ready"
-else
-    err "XFCE did not start"
-    cat "$LOG_DIR/xfce.log"
-    exit 1
-fi
+    sleep 3
 
-info "Starting Ubuntu code-server..."
-
-proot-distro login "$UBUNTU" --shared-tmp -- /bin/bash -lc "
-export DISPLAY=$DISPLAY_NUM
-export PATH=\$HOME/.local/bin:\$PATH
-
-if pgrep -u '$DEV_USER' -f 'code-server' >/dev/null 2>&1; then
-    exit 0
-fi
-
-su - '$DEV_USER' -c '
-export DISPLAY=$DISPLAY_NUM
-export PATH=\$HOME/.local/bin:\$PATH
-nohup code-server --bind-addr 127.0.0.1:$CODE_SERVER_PORT '$DEV_USER'/projects >\$HOME/code-server.log 2>&1 &
-'
-"
-
-sleep 3
-
-if proot-distro login "$UBUNTU" --shared-tmp -- /bin/bash -lc "pgrep -u '$DEV_USER' -f 'code-server' >/dev/null 2>&1"; then
-    ok "Ubuntu code-server ready"
-else
-    err "code-server failed to start"
-    proot-distro login "$UBUNTU" --shared-tmp -- /bin/bash -lc "cat /home/$DEV_USER/code-server.log 2>/dev/null || true"
-    exit 1
+    if proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+        -- bash -lc 'pgrep -u "$USER" -f "code-server" >/dev/null 2>&1'; then
+        ok "code-server started."
+    else
+        error "code-server failed to start."
+        proot-distro login "$UBUNTU_NAME" --user "$UBUNTU_USER" --shared-tmp \
+            -- bash -lc 'cat /tmp/code-server.log 2>/dev/null || true'
+        exit 1
+    fi
 fi
 
 echo
 ok "Development environment is ready."
+echo "Display : $DISPLAY"
+echo "Ubuntu  : $UBUNTU_NAME"
+echo "User    : $UBUNTU_USER"
+echo "VS Code : http://127.0.0.1:8080"
 echo
-echo "XFCE       : Termux:X11"
-echo "Ubuntu     : $UBUNTU"
-echo "User       : $DEV_USER"
-echo "VS Code UI : http://127.0.0.1:$CODE_SERVER_PORT"
-echo
-echo "Inside the VS Code terminal:"
-echo "  sudo -i"
-echo
-echo "To enter Ubuntu directly:"
-echo "  proot-distro login ubuntu --shared-tmp"
+echo "Open the Termux:X11 Android app to see XFCE."
